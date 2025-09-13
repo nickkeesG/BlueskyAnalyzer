@@ -18,7 +18,8 @@ The project consists of several Python scripts that work together to:
 ## Requirements
 
 - Python 3.8+
-- OpenAI API key (for embeddings)
+- **Bluesky account** with app password (for data collection)
+- **OpenAI API key** (for embeddings)
 - Required packages:
   - pandas
   - numpy
@@ -36,10 +37,20 @@ The project consists of several Python scripts that work together to:
    pip install pandas numpy plotly umap-learn hdbscan scikit-learn openai python-dotenv
    ```
 
-2. **Create a `.env` file** with your OpenAI API key:
+2. **Create a `.env` file** with your API keys and Bluesky credentials:
    ```
-   OPENAI_API_KEY=your_api_key_here
+   # OpenAI API key (for embeddings)
+   OPENAI_API_KEY=your_openai_api_key_here
+
+   # Bluesky credentials (for data collection)
+   BLUESKY_HANDLE=your_handle.bsky.social
+   BLUESKY_APP_PASSWORD=your_app_password_here
    ```
+
+   **To get a Bluesky app password:**
+   - Go to Settings → Privacy and Security → App Passwords in your Bluesky app
+   - Create a new app password for this project
+   - Use your full handle (e.g., `username.bsky.social`) not just the username
 
 3. **Configure your analysis** by editing `config.json`:
    - Set your desired date range
@@ -233,8 +244,9 @@ All output files are saved in the current directory or `datasets/` folder:
 
 ## Troubleshooting
 
-- **Missing API key**: Ensure `.env` file contains your OpenAI API key
+- **Missing API keys**: Ensure `.env` file contains both `OPENAI_API_KEY` and Bluesky credentials (`BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`)
+- **Authentication errors**: Verify your Bluesky handle includes the full domain (e.g., `username.bsky.social`) and your app password is correct
 - **No data found**: Check your keywords and date range in `config.json`
-- **Embedding failures**: Verify API key and check for rate limits
+- **Embedding failures**: Verify OpenAI API key and check for rate limits
 - **Empty clusters**: Try reducing `min_cluster_size` parameter
 - **Visualization issues**: Ensure plotly is installed and open HTML files in a modern browser
