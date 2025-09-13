@@ -1,0 +1,48 @@
+{
+  "run_name": "august",
+  "date_range": {
+    "start_date": "2025-08-01",
+    "end_date": "2025-08-31"
+  },
+  "keywords": [
+    "ai",
+    "grok",
+    "#ai",
+    "chatgpt",
+    "chatbot",
+    "openai",
+    "gemini",
+    "llm",
+    "claude",
+    "xai",
+    "llms",
+    "gpt",
+    "artificial intelligence",
+    "anthropic",
+    "genai",
+    "chatbots",
+    "#genai",
+    "#chatgpt",
+    "#artificialintelligence",
+    "nvidia",
+    "copilot",
+    "machine learning",
+    "language model",
+    "language models",
+    "altman",
+    "training data",
+    "data center",
+    "data centers",
+    "robot",
+    "robots",
+    "agi",
+    "deepmind",
+    "alignment problem",
+    "deep learning",
+    "neural network",
+    "prompt engineering"
+  ],
+  "filters": {
+    "min_likes": 10
+  }
+}
