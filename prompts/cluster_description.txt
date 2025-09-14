@@ -1,0 +1,24 @@
+Your task it to classify a cluster in a dataset of Bluesky posts about AI. These posts are intended to be related to discourse about AI, and help give a sense of public sentiment about AI. It is possible that the cluster in question is noise, and totally unrelated to the original intent. Please make a note of this if this is the case. 
+
+Analyze these posts to understand what makes the target cluster distinctive compared to other clusters.
+
+TARGET CLUSTER (the cluster we want to describe):
+{target_posts}
+
+COMPARISON POSTS (randomly selected from other clusters):
+{comparison_posts}
+
+Your task: Describe what makes the target cluster unique and distinctive compared to the comparison posts.
+
+Provide:
+1. Theme: 1-2 sentences that highlight the distinctive characteristics and main focus of the target cluster.
+2. Keywords: 3-5 key terms that best distinguish this cluster from others. Please use words/phrases directly used in context. 
+
+Requirements:
+- Focus on what makes this cluster DIFFERENT from the comparison posts
+- Be specific about the unique themes or topics
+- Keep the theme concise
+- If the cluster appears to contain spam, art, adult content, or posts unrelated to AI discourse, clearly identify this in the description
+
+Respond in valid JSON format:
+{"theme": "Your distinctive description here", "keywords": ["term1", "term2", "term3", "term4", "term5"]}

@@ -57,10 +57,79 @@ class DatasetAnalyzer:
         
         # Convert to DataFrame for analysis
         self.df = pd.json_normalize(posts)
+
+        # Check for duplicates by URI
+        self.check_duplicates()
+
+        # Check semantic content completeness
+        self.check_semantic_content()
+
         self.process_timestamps()
-        
+
         return True
-    
+
+    def check_duplicates(self):
+        """Check for duplicate posts by URI"""
+        print(f"🔍 Checking for duplicate posts...")
+
+        if 'uri' not in self.df.columns:
+            print("⚠️  Warning: No 'uri' column found for duplicate checking")
+            return
+
+        # Count duplicates
+        uri_counts = self.df['uri'].value_counts()
+        duplicates = uri_counts[uri_counts > 1]
+
+        if len(duplicates) == 0:
+            print("✅ No duplicate posts found")
+        else:
+            print(f"❌ Found {len(duplicates)} URIs with duplicates:")
+            for uri, count in duplicates.head(10).items():
+                print(f"  {uri}: {count} copies")
+
+            # Show total duplicated posts
+            total_duplicated = duplicates.sum() - len(duplicates)  # subtract original posts
+            print(f"🔢 Total duplicated posts: {total_duplicated:,}")
+            print(f"📊 Unique posts: {len(self.df) - total_duplicated:,}")
+
+    def check_semantic_content(self):
+        """Check for semantic content completeness"""
+        print(f"📝 Checking semantic content completeness...")
+
+        if 'semantic_content' not in self.df.columns:
+            print("❌ No 'semantic_content' column found")
+            return
+
+        # Check for missing/empty semantic content
+        missing_semantic = self.df['semantic_content'].isna().sum()
+        empty_semantic = (self.df['semantic_content'] == '').sum()
+        total_missing = missing_semantic + empty_semantic
+
+        if total_missing == 0:
+            print("✅ All posts have semantic content")
+        else:
+            print(f"❌ Posts missing semantic content: {total_missing:,}")
+            print(f"  - Null values: {missing_semantic:,}")
+            print(f"  - Empty strings: {empty_semantic:,}")
+
+        # Check semantic content length distribution
+        if total_missing < len(self.df):
+            valid_content = self.df['semantic_content'].dropna()
+            valid_content = valid_content[valid_content != '']
+
+            if len(valid_content) > 0:
+                content_lengths = valid_content.str.len()
+                print(f"📊 Semantic content length stats:")
+                print(f"  - Mean length: {content_lengths.mean():.0f} chars")
+                print(f"  - Median length: {content_lengths.median():.0f} chars")
+                print(f"  - Min length: {content_lengths.min()} chars")
+                print(f"  - Max length: {content_lengths.max()} chars")
+
+                # Check for suspiciously short content
+                short_content = (content_lengths < 50).sum()
+                if short_content > 0:
+                    print(f"⚠️  Posts with very short semantic content (<50 chars): {short_content:,}")
+
     def process_timestamps(self):
         """Process timestamps for temporal analysis"""
         print(f"⏰ Processing timestamps...")

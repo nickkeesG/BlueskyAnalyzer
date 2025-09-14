@@ -1,0 +1,35 @@
+Your task is to classify whether clusters of Bluesky posts are relevant to AI discourse and public sentiment about AI.
+
+CLUSTER DESCRIPTIONS:
+{cluster_descriptions}
+
+For each cluster, determine if it is relevant to AI discourse and public sentiment about AI.
+
+Relevant clusters include:
+- Discussions about AI technology, capabilities, limitations
+- AI safety, ethics, alignment concerns
+- AI impact on society, jobs, education, creativity
+- AI company news, product launches, research
+- Personal experiences with AI tools
+- AI regulation, policy, governance
+- AI research, papers, breakthroughs
+- Opinions about AI development and deployment
+
+Irrelevant clusters include:
+- Spam, promotional content unrelated to AI
+- Art, photography, personal content with no AI connection
+- General social media chatter unrelated to AI
+- Adult content
+- Pure entertainment/memes with no AI relevance
+
+Respond with a JSON array where each object contains:
+- cluster_id: the cluster number
+- relevance: "relevant" or "irrelevant"
+- confidence: "high", "medium", or "low"
+
+Format:
+[
+  {"cluster_id": 0, "relevance": "relevant", "confidence": "high"},
+  {"cluster_id": 1, "relevance": "irrelevant", "confidence": "medium"},
+  ...
+]

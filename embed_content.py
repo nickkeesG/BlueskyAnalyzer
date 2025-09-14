@@ -280,7 +280,6 @@ class EmbeddingProcessor:
             status_counts = {'validating': 0, 'in_progress': 0, 'finalizing': 0, 'completed': 0, 'failed': 0}
             total_posts = 0
             completed_posts = 0
-            downloaded_count = 0
             
             for job in batch_jobs:
                 batch_id = job['batch_id']
@@ -309,7 +308,6 @@ class EmbeddingProcessor:
                             # Already downloaded
                             embedding_count = job.get('embedding_count', post_count)
                             print(f"  📥 {chunk_name}: COMPLETED & DOWNLOADED ({embedding_count} embeddings)")
-                            downloaded_count += 1
                         completed_posts += post_count
                     elif status == 'failed':
                         print(f"  ❌ {chunk_name}: FAILED")
@@ -335,7 +333,7 @@ class EmbeddingProcessor:
             # Print summary
             print(f"\n📊 Progress Summary:")
             print(f"  ✅ Completed: {status_counts['completed']}/{len(batch_jobs)} chunks")
-            print(f"  📥 Downloaded: {downloaded_count + len(downloaded_files)} chunks")
+            print(f"  📥 Downloaded: {len(downloaded_files)} chunks")
             print(f"  ⚡ In Progress: {status_counts['in_progress']} chunks")
             print(f"  🔄 Validating: {status_counts['validating']} chunks") 
             print(f"  🔧 Finalizing: {status_counts['finalizing']} chunks")
