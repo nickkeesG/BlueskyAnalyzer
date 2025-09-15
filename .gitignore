@@ -1,5 +1,9 @@
 *.jsonl
+*.png
 plots/
 venv/
 .env
 __pycache__/
+bluesky_auth.json
+screenshots/
+reports/

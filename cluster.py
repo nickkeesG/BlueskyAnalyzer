@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Clustering script for reduced Bluesky embeddings.
-Works with output from reduce.py and performs HDBSCAN clustering + 2D visualization.
+Works with output from reduce.py and performs Gaussian Mixture Model (GMM) clustering + 2D visualization.
 Usage: python cluster.py <session_name_dimensions> [options]
 """
 

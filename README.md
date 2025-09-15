@@ -13,28 +13,32 @@ The project consists of several Python scripts that work together to:
 5. **Embed** content using OpenAI's text-embedding-3-large model
 6. **Analyze** posting patterns and engagement metrics
 7. **Cluster** posts based on semantic similarity
-8. **Visualize** results through interactive dashboards
+8. **Screenshot** representative posts automatically
+9. **Generate** comprehensive HTML reports with embedded images
+10. **Visualize** results through interactive dashboards
 
 ## Requirements
 
 - Python 3.8+
 - **Bluesky account** with app password (for data collection)
+- **Bluesky web password** (for screenshot generation)
 - **OpenAI API key** (for embeddings)
 - Required packages:
   - pandas
   - numpy
   - plotly
   - umap-learn
-  - hdbscan
   - scikit-learn
   - openai
   - python-dotenv
+  - playwright
 
 ## Setup
 
 1. **Install dependencies** (recommended in a virtual environment):
    ```bash
-   pip install pandas numpy plotly umap-learn hdbscan scikit-learn openai python-dotenv
+   pip install pandas numpy plotly umap-learn scikit-learn openai python-dotenv playwright
+   playwright install chromium
    ```
 
 2. **Create a `.env` file** with your API keys and Bluesky credentials:
@@ -45,6 +49,9 @@ The project consists of several Python scripts that work together to:
    # Bluesky credentials (for data collection)
    BLUESKY_HANDLE=your_handle.bsky.social
    BLUESKY_APP_PASSWORD=your_app_password_here
+
+   # Bluesky web password (for screenshot generation)
+   BLUESKY_WEB_PASSWROD=your_regular_bluesky_password
    ```
 
    **To get a Bluesky app password:**
@@ -141,30 +148,81 @@ This generates:
 - Author analysis (top authors by engagement)
 - Interactive HTML dashboard with visualizations
 
-### 4. Clustering Analysis
+### 4. Dimensionality Reduction
 
-Perform semantic clustering on embedded posts:
+Reduce high-dimensional embeddings for clustering:
 
 ```bash
-python cluster_analysis.py <session_name>
+python reduce.py <session_name>
 ```
 
 **Example:**
 ```bash
-python cluster_analysis.py august
+python reduce.py august
+```
+
+This applies UMAP to reduce embeddings from high-dimensional space to lower dimensions suitable for clustering.
+
+### 5. Clustering Analysis
+
+Perform semantic clustering on reduced embeddings:
+
+```bash
+python cluster.py <session_name>
+```
+
+**Example:**
+```bash
+python cluster.py august
+```
+
+This produces:
+- Gaussian Mixture Model (GMM) clustering of posts
+- Interactive visualization of clusters
+- Clustered data output file with assignments
+
+### 6. Post Screenshots
+
+Generate screenshots of individual Bluesky posts:
+
+```bash
+python bluesky_screenshot.py <post_url>
+```
+
+**Example:**
+```bash
+python bluesky_screenshot.py "https://bsky.app/profile/username/post/postid"
 ```
 
 **Options:**
-- `--top-posts, -t`: Number of representative posts per cluster (default: 5)
-- `--min-cluster-size`: Minimum posts per cluster (default: 50)
-- `--min-samples`: Core point threshold for clustering (default: 10)
+- `-o, --output`: Custom output filename (optional)
 
-This produces:
-- UMAP dimensionality reduction (high-dim → 50D → 2D)
-- HDBSCAN clustering of posts
-- Interactive visualization of clusters
-- Representative posts for each cluster
-- Clustered data output file
+This tool:
+- Automatically logs into Bluesky using your credentials
+- Navigates to the post and waits for content to load
+- Takes a clean screenshot cropped to just the post content
+- Saves as PNG file ready for sharing or embedding
+
+### 7. Report Generation
+
+Generate comprehensive HTML reports with embedded screenshots:
+
+```bash
+python generate_cluster_report.py <session_name>
+```
+
+**Example:**
+```bash
+python generate_cluster_report.py august
+```
+
+This creates a complete analysis report including:
+- Executive summary with key statistics
+- Detailed analysis of each relevant cluster
+- Embedded screenshots of top 3 representative posts per cluster
+- Clickable author profiles
+- Temporal analysis charts
+- Methodology and data pipeline documentation
 
 ## File Structure
 
@@ -175,11 +233,15 @@ This produces:
 - `datasets/{run_name}_raw_data.jsonl`: Raw downloaded posts from Bluesky API
 - `datasets/{run_name}_processed.jsonl`: Processed posts after filtering and enrichment
 - `datasets/{run_name}_embedded.jsonl`: Semantic content with embeddings
-- `datasets/{run_name}_with_clusters.jsonl`: Posts with cluster assignments (from clustering analysis)
+- `datasets/{run_name}_reduced.jsonl`: Dimensionality-reduced embeddings
+- `datasets/{run_name}_clusters.jsonl`: Posts with cluster assignments
+- `datasets/{run_name}_cluster_descriptions.jsonl`: AI-generated cluster descriptions
 
 ### Analysis Outputs
 - `{run_name}_dataset_analysis.html`: Interactive analysis dashboard
 - `{run_name}_clustering_viz.html`: Interactive cluster visualization
+- `screenshots/`: Directory containing post screenshots (PNG files)
+- `reports/{run_name}_cluster_report.html`: Comprehensive HTML report with embedded images
 
 ## Pipeline Steps (Internal)
 
@@ -208,9 +270,17 @@ The main pipeline consists of 5 steps executed by `main_pipeline.py`:
    ```bash
    python analyze_dataset.py august
    ```
-5. **Perform clustering**:
+5. **Reduce dimensions**:
    ```bash
-   python cluster_analysis.py august
+   python reduce.py august
+   ```
+6. **Perform clustering**:
+   ```bash
+   python cluster.py august
+   ```
+7. **Generate comprehensive report**:
+   ```bash
+   python generate_cluster_report.py august
    ```
 
 ### Quick dataset analysis only:
