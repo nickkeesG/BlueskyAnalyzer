@@ -266,46 +266,6 @@ class BlueskyScreenshotImproved:
             except:
                 print("⚠️ No significant content detected, but continuing...")
 
-            # Check if we're on the "sign in required" page
-            page_text = self.page.inner_text("body")
-            if "need to be signed in" in page_text.lower() or "sign in" in page_text.lower():
-                print("🚨 AUTHENTICATION FAILED: Page shows 'need to be signed in'")
-                print("🔄 Clearing saved authentication and retrying with fresh login...")
-
-                # Delete the saved auth file and retry login
-                auth_path = Path(self.auth_file)
-                if auth_path.exists():
-                    auth_path.unlink()
-                    print("🗑️ Deleted stale authentication file")
-
-                # Close current context and create new one
-                if self.context:
-                    self.context.close()
-
-                # Perform fresh login
-                print("🔐 Performing fresh login...")
-                self.context = self.browser.new_context(
-                    user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                )
-                if not self._perform_login():
-                    print("❌ Fresh login failed")
-                    return False
-
-                # Create new page and retry navigation
-                self.page = self.context.new_page()
-                print("🔄 Retrying navigation with fresh authentication...")
-                self.page.goto(post_info['url'], wait_until="networkidle")
-                self.page.wait_for_load_state('networkidle')
-                self.page.wait_for_timeout(5000)
-
-                # Check again after fresh login
-                page_text = self.page.inner_text("body")
-                if "need to be signed in" in page_text.lower():
-                    print("🚨 STILL FAILED: Post might be private or restricted")
-                    return False
-                else:
-                    print("✅ Fresh login successful!")
-
             # Debug: Take screenshot of the post page
             print("📸 Taking debug screenshot of post page...")
             self.page.screenshot(path="debug_post_page.png")

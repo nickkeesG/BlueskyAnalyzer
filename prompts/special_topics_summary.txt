@@ -1,0 +1,16 @@
+Your task is to analyze a collection of Bluesky posts related to AI discourse.
+
+TOP POSTS (semantic content):
+{posts_content}
+
+Please analyze these posts and provide a 2-3 sentence summary that covers:
+1. The overall sentiment and tone of the discussion around this topic
+2. The core themes, arguments, or perspectives being expressed
+3. Any specific recurring comments, phrases, or talking points about this topic
+
+Focus on capturing the public discourse and sentiment patterns. Consider whether the discussion is optimistic, pessimistic, analytical, emotional, etc. Identify what specific aspects or concerns are being highlighted, and note any common refrains or repeated arguments that appear across multiple posts.
+
+Respond with a JSON object containing your analysis:
+{
+  "summary": "Your 2-3 sentence analysis here focusing on sentiment/tone and core themes."
+}

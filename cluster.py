@@ -148,8 +148,8 @@ def save_cluster_results(session_name, uris, cluster_labels, cluster_probabiliti
 def main():
     parser = argparse.ArgumentParser(description='GMM clustering for reduced Bluesky embeddings')
     parser.add_argument('session_name', help='Session name (e.g., "august") - will automatically look for session_reduced.jsonl')
-    parser.add_argument('--n-components', type=int, default=30,
-                       help='Number of mixture components/clusters (default: 30)')
+    parser.add_argument('--n-components', type=int, default=50,
+                       help='Number of mixture components/clusters (default: 50)')
     parser.add_argument('--covariance-type', choices=['full', 'tied', 'diag', 'spherical'], default='full',
                        help='Covariance type (default: full)')
 

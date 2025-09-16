@@ -13,9 +13,12 @@ The project consists of several Python scripts that work together to:
 5. **Embed** content using OpenAI's text-embedding-3-large model
 6. **Analyze** posting patterns and engagement metrics
 7. **Cluster** posts based on semantic similarity
-8. **Screenshot** representative posts automatically
-9. **Generate** comprehensive HTML reports with embedded images
-10. **Visualize** results through interactive dashboards
+8. **Generate** AI-powered cluster descriptions and relevance classifications
+9. **Search** posts by keywords within relevant clusters
+10. **Analyze** special topics with configurable keyword searches and AI summaries
+11. **Screenshot** representative posts automatically with improved targeting
+12. **Generate** comprehensive HTML reports with embedded images and special topics
+13. **Visualize** results through interactive dashboards
 
 ## Requirements
 
@@ -181,9 +184,65 @@ This produces:
 - Interactive visualization of clusters
 - Clustered data output file with assignments
 
-### 6. Post Screenshots
+### 6. Cluster Analysis and Descriptions
 
-Generate screenshots of individual Bluesky posts:
+Generate AI-powered descriptions for semantic clusters:
+
+```bash
+python analyze_clusters.py <session_name>
+```
+
+**Example:**
+```bash
+python analyze_clusters.py august
+```
+
+This tool:
+- Generates AI-powered descriptions for each cluster using GPT-5 mini
+- Classifies clusters as relevant or irrelevant to your analysis
+- Creates comprehensive cluster metadata with titles, themes, and keywords
+- Outputs structured data for use in reports
+
+### 7. Keyword Search
+
+Search for posts by keywords within relevant clusters:
+
+```bash
+python search_posts.py <session_name> <keywords>
+```
+
+**Example:**
+```bash
+python search_posts.py august "artificial intelligence" "machine learning"
+```
+
+**Options:**
+- `--limit N`: Number of results to show (default: 10)
+- `--min-likes N`: Minimum likes threshold (default: 0)
+- `--sort-by {likes,score}`: Sort by likes or engagement score (default: likes)
+
+### 8. Special Topics Analysis
+
+Analyze configurable special topics with AI summaries:
+
+```bash
+python special_topics.py <session_name>
+```
+
+**Example:**
+```bash
+python special_topics.py august
+```
+
+This tool:
+- Uses `search_config.json` to define search groups and keywords
+- Finds posts matching each topic's keywords
+- Generates AI-powered summaries for each topic
+- Outputs structured analysis for inclusion in reports
+
+### 9. Post Screenshots
+
+Generate screenshots of individual Bluesky posts with enhanced targeting:
 
 ```bash
 python bluesky_screenshot.py <post_url>
@@ -199,11 +258,12 @@ python bluesky_screenshot.py "https://bsky.app/profile/username/post/postid"
 
 This tool:
 - Automatically logs into Bluesky using your credentials
-- Navigates to the post and waits for content to load
+- Enhanced post targeting to avoid capturing wrong posts in reply threads
+- Filters out posts with role="link" to find the actual target post
 - Takes a clean screenshot cropped to just the post content
-- Saves as PNG file ready for sharing or embedding
+- Includes robust error handling and authentication recovery
 
-### 7. Report Generation
+### 10. Report Generation
 
 Generate comprehensive HTML reports with embedded screenshots:
 
@@ -218,8 +278,10 @@ python generate_cluster_report.py august
 
 This creates a complete analysis report including:
 - Executive summary with key statistics
-- Detailed analysis of each relevant cluster
+- Detailed analysis of each relevant cluster with AI-generated descriptions
+- Special topics analysis with keyword-based searches and AI summaries
 - Embedded screenshots of top 3 representative posts per cluster
+- Link analysis and external content tracking
 - Clickable author profiles
 - Temporal analysis charts
 - Methodology and data pipeline documentation
@@ -228,6 +290,7 @@ This creates a complete analysis report including:
 
 ### Input Files
 - `config.json`: Configuration for data collection and processing
+- `search_config.json`: Configuration for special topics keyword searches
 
 ### Pipeline Outputs
 - `datasets/{run_name}_raw_data.jsonl`: Raw downloaded posts from Bluesky API
@@ -236,6 +299,7 @@ This creates a complete analysis report including:
 - `datasets/{run_name}_reduced.jsonl`: Dimensionality-reduced embeddings
 - `datasets/{run_name}_clusters.jsonl`: Posts with cluster assignments
 - `datasets/{run_name}_cluster_descriptions.jsonl`: AI-generated cluster descriptions
+- `datasets/{run_name}_special_topics.jsonl`: Special topics analysis results
 
 ### Analysis Outputs
 - `{run_name}_dataset_analysis.html`: Interactive analysis dashboard
@@ -278,7 +342,15 @@ The main pipeline consists of 5 steps executed by `main_pipeline.py`:
    ```bash
    python cluster.py august
    ```
-7. **Generate comprehensive report**:
+7. **Generate cluster descriptions**:
+   ```bash
+   python analyze_clusters.py august
+   ```
+8. **Analyze special topics** (optional):
+   ```bash
+   python special_topics.py august
+   ```
+9. **Generate comprehensive report**:
    ```bash
    python generate_cluster_report.py august
    ```

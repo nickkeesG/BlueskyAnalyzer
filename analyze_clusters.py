@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
-Cluster analysis tool for Bluesky posts.
-Shows cluster overview and top posts by likes for specific clusters.
-Usage:
-  python analyze_clusters.py <session_name>                    # Show overview
-  python analyze_clusters.py <session_name> --cluster <id>     # Show top posts for cluster
+Cluster description generator for Bluesky posts.
+Generates AI-powered cluster descriptions and relevance classifications.
+Usage: python analyze_clusters.py <session_name>
 """
 
 import json
 import argparse
 from pathlib import Path
 from collections import Counter
-import plotly.express as px
-import plotly.graph_objects as go
 import random
 import os
 from dotenv import load_dotenv
@@ -71,96 +67,6 @@ def load_data(session_name: str):
     print(f"✅ Loaded {len(posts):,} posts with cluster assignments")
     return posts
 
-
-def show_cluster_overview(posts):
-    """Show overview of cluster sizes and average normalized score for top 10 posts"""
-    cluster_counts = Counter(post['cluster_id'] for post in posts)
-
-    def get_score(post):
-        likes = post.get('likeCount', 0)
-        prob = post.get('cluster_probability', 1.0)  # Default to 1.0 if no probability
-        return likes * (prob ** 2) if prob is not None else likes
-
-    print(f"\n📊 Cluster Overview")
-    print("=" * 80)
-
-    print(f"Clusters: {len(cluster_counts)} total")
-    print(f"Total posts: {len(posts):,}")
-    print("-" * 80)
-
-    for cluster_id in sorted(cluster_counts.keys()):
-        count = cluster_counts[cluster_id]
-        # Calculate average normalized score for top 10 posts in this cluster
-        cluster_posts = [p for p in posts if p['cluster_id'] == cluster_id]
-        cluster_posts.sort(key=get_score, reverse=True)
-        top_10_posts = cluster_posts[:10]
-        avg_score = sum(get_score(p) for p in top_10_posts) / len(top_10_posts) if top_10_posts else 0
-        print(f"Cluster {cluster_id:2d}: {count:,} posts ({count/len(posts)*100:.1f}%) | Avg score (top 10): {avg_score:.1f}")
-
-
-def show_top_posts(posts, cluster_id, top_n=10):
-    """Show top posts by likes*probability for a specific cluster"""
-    cluster_posts = [p for p in posts if p['cluster_id'] == cluster_id]
-
-    if not cluster_posts:
-        print(f"❌ No posts found for cluster {cluster_id}")
-        return
-
-    # Sort by like count * probability (descending)
-    def get_score(post):
-        likes = post.get('likeCount', 0)
-        prob = post.get('cluster_probability', 1.0)  # Default to 1.0 if no probability
-        return likes * (prob ** 2) if prob is not None else likes
-
-    cluster_posts.sort(key=get_score, reverse=True)
-    top_posts = cluster_posts[:top_n]
-
-    print(f"\n🏆 Top {len(top_posts)} posts in Cluster {cluster_id} (by likes × probability²)")
-    print(f"Total posts in cluster {cluster_id}: {len(cluster_posts):,}")
-    print("=" * 80)
-
-    for i, post in enumerate(top_posts, 1):
-        author = post.get('author', {})
-        display_name = author.get('displayName', 'Unknown')
-        handle = author.get('handle', 'unknown')
-
-        likes = post.get('likeCount', 0)
-        reposts = post.get('repostCount', 0)
-        replies = post.get('replyCount', 0)
-        cluster_prob = post.get('cluster_probability')
-
-        # Get post text
-        record = post.get('record', {})
-        text = record.get('text', '')
-        if len(text) > 200:
-            text = text[:200] + "..."
-
-        created_at = record.get('createdAt', '')
-        if created_at:
-            # Just show the date part
-            created_at = created_at[:10]
-
-        # Convert AT URI to Bluesky URL
-        uri = post.get('uri', '')
-        bluesky_url = ''
-        if uri.startswith('at://'):
-            # Extract did and post ID from AT URI
-            # Format: at://did:plc:xyz/app.bsky.feed.post/abc123
-            parts = uri.replace('at://', '').split('/')
-            if len(parts) >= 3:
-                did = parts[0]
-                post_id = parts[2]
-                bluesky_url = f"https://bsky.app/profile/{did}/post/{post_id}"
-
-        # Format probability display
-        prob_text = f" | 🎯 {cluster_prob:.1%}" if cluster_prob is not None else ""
-
-        print(f"{i:2d}. {display_name} (@{handle})")
-        print(f"    ❤️ {likes:,} | 🔄 {reposts:,} | 💬 {replies:,} | 📅 {created_at}{prob_text}")
-        print(f"    {text}")
-        if bluesky_url:
-            print(f"    🔗 {bluesky_url}")
-        print()
 
 
 def generate_cluster_descriptions(posts, session_name):
@@ -263,17 +169,21 @@ def generate_cluster_descriptions(posts, session_name):
                 # Parse JSON response
                 try:
                     ai_analysis = json.loads(response_text)
+                    title = ai_analysis.get('title', 'Untitled Cluster')
                     theme = ai_analysis.get('theme', 'No theme provided')
                     keywords = ai_analysis.get('keywords', [])
-                except json.JSONDecodeError:
-                    print(f"    ⚠️  Warning: Invalid JSON response for cluster {cluster_id}")
-                    theme = response_text
-                    keywords = []
+                except json.JSONDecodeError as e:
+                    print(f"🚨 CRITICAL ERROR: Invalid JSON response for cluster {cluster_id}")
+                    print(f"🚨 JSON Error: {e}")
+                    print(f"🚨 Raw response: {response_text[:200]}...")
+                    print(f"🚨 This will cause the analysis pipeline to fail")
+                    raise RuntimeError(f"Invalid JSON response for cluster {cluster_id}: {e}")
 
                 # Create cluster description entry
                 description = {
                     'cluster_id': cluster_id,
                     'post_count': len([p for p in posts if p['cluster_id'] == cluster_id]),
+                    'title': title,
                     'theme': theme,
                     'keywords': keywords
                 }
@@ -284,16 +194,10 @@ def generate_cluster_descriptions(posts, session_name):
                 print(f"    ✅ Generated: {theme[:50]}...")
 
             except Exception as e:
-                print(f"    ❌ Error calling GPT-5 mini for cluster {cluster_id}: {e}")
-                # Create fallback entry
-                fallback_description = {
-                    'cluster_id': cluster_id,
-                    'post_count': len([p for p in posts if p['cluster_id'] == cluster_id]),
-                    'theme': 'Error generating description',
-                    'keywords': []
-                }
-                descriptions.append(fallback_description)
-                f.write(json.dumps(fallback_description, ensure_ascii=False) + '\n')
+                print(f"🚨 CRITICAL ERROR: Failed to generate description for cluster {cluster_id}")
+                print(f"🚨 Error details: {e}")
+                print(f"🚨 This will cause the analysis pipeline to fail")
+                raise RuntimeError(f"Failed to generate description for cluster {cluster_id}: {e}")
 
     print(f"📄 Cluster descriptions saved to: {output_file}")
     return output_file, descriptions
@@ -344,7 +248,7 @@ def classify_cluster_relevance(descriptions, session_name):
             messages=[
                 {"role": "user", "content": prompt}
             ],
-            max_completion_tokens=2000
+            max_completion_tokens=4000
         )
 
         response_text = response.choices[0].message.content
@@ -407,61 +311,15 @@ def classify_cluster_relevance(descriptions, session_name):
         return descriptions
 
 
-def generate_cluster_report(posts, session_name):
-    """Generate a text report with top 6 posts for each cluster"""
-    from collections import Counter
-
-    def get_score(post):
-        likes = post.get('likeCount', 0)
-        prob = post.get('cluster_probability', 1.0)
-        return likes * (prob ** 2) if prob is not None else likes
-
-    cluster_counts = Counter(post['cluster_id'] for post in posts)
-
-    # Prepare output file
-    reports_dir = Path('reports')
-    reports_dir.mkdir(exist_ok=True)  # Create reports directory if it doesn't exist
-    report_file = reports_dir / f"{session_name}_cluster_report.txt"
-
-    with open(report_file, 'w', encoding='utf-8') as f:
-        f.write(f"CLUSTER ANALYSIS REPORT - {session_name.upper()}\n")
-        f.write("=" * 60 + "\n\n")
-
-        for cluster_id in sorted(cluster_counts.keys()):
-            cluster_posts = [p for p in posts if p['cluster_id'] == cluster_id]
-            cluster_posts.sort(key=get_score, reverse=True)
-            top_6_posts = cluster_posts[:6]
-
-            f.write(f"CLUSTER {cluster_id}\n")
-            f.write("-" * 20 + "\n")
-            f.write(f"Total posts in cluster: {len(cluster_posts):,}\n\n")
-
-            for i, post in enumerate(top_6_posts, 1):
-                # Get semantic content
-                semantic_content = post.get('semantic_content', '')
-
-                f.write(f"{semantic_content}\n")
-                f.write("-" * 40 + "\n")
-
-            f.write("\n" + "=" * 60 + "\n\n")
-
-    print(f"📄 Cluster report saved to: {report_file}")
-    return report_file
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Analyze Bluesky post clusters')
+    parser = argparse.ArgumentParser(description='Generate AI-powered cluster descriptions')
     parser.add_argument('session_name', help='Name of the session (e.g., "july", "august")')
-    parser.add_argument('--cluster', '-c', type=int,
-                       help='Show top posts for specific cluster ID')
-    parser.add_argument('--top', '-t', type=int, default=10,
-                       help='Number of top posts to show (default: 10)')
-    parser.add_argument('--generate-descriptions', '-g', action='store_true',
-                       help='Generate AI-powered cluster descriptions using GPT-5 mini')
 
     args = parser.parse_args()
 
-    print(f"🔍 Analyzing clusters for '{args.session_name}'")
+    print(f"🤖 Generating cluster descriptions for '{args.session_name}'")
     print("=" * 50)
 
     # Load data
@@ -469,53 +327,85 @@ def main():
     if posts is None:
         return 1
 
-    if args.cluster is not None:
-        # Show top posts for specific cluster
-        show_top_posts(posts, args.cluster, args.top)
-    elif args.generate_descriptions:
-        # Generate AI-powered cluster descriptions
+    # Check if descriptions already exist
+    datasets_dir = Path('datasets')
+    descriptions_file = datasets_dir / f"{args.session_name}_cluster_descriptions.jsonl"
+
+    descriptions = None
+    generate_descriptions = True
+
+    if descriptions_file.exists():
+        print(f"⚠️  Cluster descriptions already exist: {descriptions_file}")
+        response = input("Do you want to overwrite them? (y/N): ").strip().lower()
+        if response not in ['y', 'yes']:
+            print("✅ Keeping existing descriptions. Moving to classification step...")
+            generate_descriptions = False
+
+            # Load existing descriptions
+            descriptions = []
+            with open(descriptions_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        desc = json.loads(line.strip())
+                        descriptions.append(desc)
+                    except json.JSONDecodeError:
+                        continue
+            print(f"📖 Loaded {len(descriptions)} existing descriptions")
+
+    # Generate AI-powered cluster descriptions if needed
+    if generate_descriptions:
         result = generate_cluster_descriptions(posts, args.session_name)
         if result:
             descriptions_file, descriptions = result
             print(f"\n🤖 AI cluster descriptions generated!")
+        else:
+            return 1
 
+    # Check if we need to classify relevance
+    if descriptions:
+        # Check if relevance classifications already exist
+        has_relevance = any(d.get('relevance') for d in descriptions)
+
+        if has_relevance:
+            print(f"⚠️  Relevance classifications already exist")
+            response = input("Do you want to re-classify relevance? (y/N): ").strip().lower()
+            if response not in ['y', 'yes']:
+                print("✅ Keeping existing classifications")
+                updated_descriptions = descriptions
+            else:
+                # Classify relevance
+                updated_descriptions = classify_cluster_relevance(descriptions, args.session_name)
+        else:
+            print("🔍 No relevance classifications found. Running classification...")
             # Classify relevance
             updated_descriptions = classify_cluster_relevance(descriptions, args.session_name)
 
-            print(f"📄 Final results saved to: {descriptions_file}")
+        print(f"📄 Final results saved to: {descriptions_file}")
 
-            # Show brief summary with relevance
-            print(f"\n📊 Summary:")
-            relevant_clusters = [d for d in updated_descriptions if d.get('relevance') == 'relevant']
-            irrelevant_clusters = [d for d in updated_descriptions if d.get('relevance') == 'irrelevant']
+        # Show brief summary with relevance
+        print(f"\n📊 Summary:")
+        relevant_clusters = [d for d in updated_descriptions if d.get('relevance') == 'relevant']
+        irrelevant_clusters = [d for d in updated_descriptions if d.get('relevance') == 'irrelevant']
 
-            print(f"\n🎯 Relevant Clusters ({len(relevant_clusters)}):")
-            for desc in relevant_clusters[:3]:  # Show first 3 relevant
+        print(f"\n🎯 Relevant Clusters ({len(relevant_clusters)}):")
+        for desc in relevant_clusters:  # Show ALL relevant
+            cluster_id = desc['cluster_id']
+            title = desc.get('title', 'Untitled')
+            theme = desc['theme']
+            post_count = desc['post_count']
+            confidence = desc.get('confidence', '')
+            print(f"  Cluster {cluster_id} ({post_count:,} posts, {confidence}): {title} - {theme[:50]}...")
+
+        if len(irrelevant_clusters) > 0:
+            print(f"\n🚫 Irrelevant Clusters ({len(irrelevant_clusters)}):")
+            for desc in irrelevant_clusters:  # Show ALL irrelevant
                 cluster_id = desc['cluster_id']
+                title = desc.get('title', 'Untitled')
                 theme = desc['theme']
                 post_count = desc['post_count']
-                confidence = desc.get('confidence', '')
-                print(f"  Cluster {cluster_id} ({post_count:,} posts, {confidence}): {theme[:60]}...")
-
-            if len(irrelevant_clusters) > 0:
-                print(f"\n🚫 Irrelevant Clusters ({len(irrelevant_clusters)}):")
-                for desc in irrelevant_clusters[:2]:  # Show first 2 irrelevant
-                    cluster_id = desc['cluster_id']
-                    theme = desc['theme']
-                    post_count = desc['post_count']
-                    print(f"  Cluster {cluster_id} ({post_count:,} posts): {theme[:60]}...")
+                print(f"  Cluster {cluster_id} ({post_count:,} posts): {title} - {theme[:50]}...")
     else:
-        # Show overview
-        show_cluster_overview(posts)
-
-        # Generate cluster report
-        report_file = generate_cluster_report(posts, args.session_name)
-
-        print(f"\n💡 Use --cluster <id> to see top posts for a specific cluster")
-        print(f"   Example: python analyze_clusters.py {args.session_name} --cluster 0")
-        print(f"\n💡 Use --generate-descriptions to create AI-powered cluster descriptions")
-        print(f"   Example: python analyze_clusters.py {args.session_name} --generate-descriptions")
-        print(f"\n📄 Detailed cluster report generated: {report_file.name}")
+        return 1
 
     return 0
 

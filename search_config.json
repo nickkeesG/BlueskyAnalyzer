@@ -1,0 +1,44 @@
+{
+  "search_groups": [
+    {
+      "title": "Rationalism",
+      "keywords": ["lesswrong", "yudkowski", "rationalism", "rationalist", "scott alexander"]
+    },
+    {
+      "title": "Effective Altruism",
+      "keywords": ["effective altruism", "effective altruist", "longtermism", "80000 hours", "will macaskill"]
+    },
+    {
+      "title": "Butlerian Jihad",
+      "keywords": ["butlerian jihad"]
+    },
+    {
+      "title": "If Anyone Builds It, Everyone Dies",
+      "keywords": ["if anyone builds it"]
+    },
+    {
+      "title": "AI 2027",
+      "keywords": ["AI 2027"]
+    },
+    {
+      "title": "Terminator",
+      "keywords": ["skynet", "terminator", "t-1000", "t-800", "sarah connor"]
+    },
+    {
+      "title": "Superhuman AI",
+      "keywords": ["superintelligence", "superhuman"]
+    },
+    {
+      "title": "Existential Risk",
+      "keywords": ["human extinction", "kill us all", "existential risk", "end of the world", "xrisk", "x-risk"]
+    },
+    {
+      "title": "China",
+      "keywords": ["china", "taiwan"]
+    },
+    {
+      "title": "AI Alignment",
+      "keywords": ["ai alignment", "ai safety", "alignment problem", "alignment research", "interpretability"]
+    }
+  ]
+}

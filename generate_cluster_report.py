@@ -19,6 +19,8 @@ import subprocess
 import os
 from collections import defaultdict, Counter
 import numpy as np
+import re
+from urllib.parse import urlparse
 
 
 class ClusterReportGenerator:
@@ -39,6 +41,9 @@ class ClusterReportGenerator:
         self.posts = {}
         self.relevant_cluster_ids = set()
         self.cluster_id_mapping = {}  # Maps original ID -> new sequential number
+
+        # Search config
+        self.search_config = self.load_search_config()
 
     def load_data(self):
         """Load all required data files"""
@@ -100,6 +105,20 @@ class ClusterReportGenerator:
 
         return True
 
+    def load_search_config(self):
+        """Load search configuration from search_config.json"""
+        config_file = Path('search_config.json')
+        if config_file.exists():
+            try:
+                with open(config_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"⚠️  Warning: Could not load search config: {e}")
+                return {"search_groups": []}
+        else:
+            print("⚠️  Warning: search_config.json not found - special searches will be skipped")
+            return {"search_groups": []}
+
     def _create_cluster_id_mapping(self):
         """Create mapping from original cluster IDs to sequential numbers for relevant clusters only"""
         print("  📊 Creating cluster ID mapping for sequential numbering (relevant clusters only)...")
@@ -124,6 +143,139 @@ class ClusterReportGenerator:
     def get_display_cluster_id(self, original_id: int) -> int:
         """Get the display cluster ID (sequential number) for an original cluster ID"""
         return self.cluster_id_mapping.get(original_id, original_id)
+
+    def extract_links_from_post(self, post):
+        """Extract all external links from a post"""
+        links = set()
+
+        # Extract from text using regex
+        text = post.get('record', {}).get('text', '')
+        if text:
+            url_pattern = r'https?://[^\s<>"\'{}|\\^`\[\]]+[^\s<>"\'{}|\\^`\[\].,;:!?]'
+            text_urls = re.findall(url_pattern, text)
+            for url in text_urls:
+                # Filter out Bluesky internal URLs and media URLs
+                if not self._is_internal_url(url):
+                    links.add(url)
+
+        # Extract from facets (formatted links)
+        facets = post.get('record', {}).get('facets', [])
+        for facet in facets:
+            for feature in facet.get('features', []):
+                if feature.get('$type') == 'app.bsky.richtext.facet#link':
+                    url = feature.get('uri', '')
+                    if url and not self._is_internal_url(url):
+                        links.add(url)
+
+        # Extract from external embeds
+        embed = post.get('record', {}).get('embed', {})
+        if embed.get('$type') == 'app.bsky.embed.external':
+            external_url = embed.get('external', {}).get('uri', '')
+            if external_url and not self._is_internal_url(external_url):
+                links.add(external_url)
+
+        # Extract from embed view (for rendered embeds)
+        embed_view = post.get('embed', {})
+        if embed_view.get('$type') == 'app.bsky.embed.external#view':
+            external_url = embed_view.get('external', {}).get('uri', '')
+            if external_url and not self._is_internal_url(external_url):
+                links.add(external_url)
+
+        return list(links)
+
+    def _is_internal_url(self, url):
+        """Check if URL is Bluesky internal or media URL that should be filtered out"""
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+
+            # Filter out Bluesky domains and CDN URLs
+            internal_domains = {
+                'bsky.app', 'cdn.bsky.app', 'bsky.social',
+                'at.bsky.app', 'staging.bsky.app'
+            }
+
+            # Filter out common media/CDN domains that aren't content
+            media_domains = {
+                'pbs.twimg.com', 'imgur.com', 'i.imgur.com',
+                'media.tenor.com', 'giphy.com', 'media.giphy.com'
+            }
+
+            return any(domain == d or domain.endswith('.' + d) for d in internal_domains | media_domains)
+
+        except:
+            return True  # Filter out malformed URLs
+
+    def analyze_top_links(self):
+        """Analyze and return top 30 links from relevant clusters"""
+        print("  🔗 Analyzing top links from posts...")
+
+        link_stats = defaultdict(lambda: {
+            'count': 0,
+            'total_likes': 0,
+            'posts': [],
+            'domain': '',
+            'title': ''
+        })
+
+        # Process all posts from relevant clusters
+        for cluster_id in self.relevant_cluster_ids:
+            cluster_posts = self.get_posts_for_cluster(cluster_id)
+
+            for post in cluster_posts:
+                links = self.extract_links_from_post(post)
+
+                for link in links:
+                    # Normalize URL (remove tracking parameters, etc.)
+                    normalized_link = self._normalize_url(link)
+
+                    link_stats[normalized_link]['count'] += 1
+                    link_stats[normalized_link]['total_likes'] += post.get('likeCount', 0)
+                    link_stats[normalized_link]['posts'].append(post)
+
+                    # Extract domain for grouping
+                    try:
+                        domain = urlparse(normalized_link).netloc.lower()
+                        if domain.startswith('www.'):
+                            domain = domain[4:]
+                        link_stats[normalized_link]['domain'] = domain
+                    except:
+                        link_stats[normalized_link]['domain'] = 'unknown'
+
+        # Sort by count and return top 30
+        top_links = sorted(
+            link_stats.items(),
+            key=lambda x: (x[1]['count'], x[1]['total_likes']),
+            reverse=True
+        )[:30]
+
+        print(f"    📊 Found {len(link_stats)} unique links, showing top 30")
+        return top_links
+
+    def _normalize_url(self, url):
+        """Normalize URL by removing common tracking parameters"""
+        try:
+            parsed = urlparse(url)
+            # Remove common tracking parameters
+            query_parts = []
+            if parsed.query:
+                for param in parsed.query.split('&'):
+                    if '=' in param:
+                        key = param.split('=')[0].lower()
+                        # Keep non-tracking parameters
+                        if key not in {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+                                     'fbclid', 'gclid', 'ref', 'referrer', '_hsenc', '_hsmi'}:
+                            query_parts.append(param)
+
+            # Reconstruct URL
+            normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            if query_parts:
+                normalized += '?' + '&'.join(query_parts)
+
+            return normalized
+
+        except:
+            return url  # Return original if parsing fails
 
     def get_posts_for_cluster(self, cluster_id: int):
         """Get all posts assigned to a specific cluster"""
@@ -228,18 +380,20 @@ class ClusterReportGenerator:
         return None
 
     def generate_screenshots_for_cluster(self, cluster_id: int):
-        """Generate screenshots for top 3 posts in a cluster"""
+        """Generate screenshots for top 3 posts in a cluster, with fallback to next best posts if screenshots fail"""
         print(f"  📸 Getting screenshots for cluster {cluster_id}...")
 
-        top_posts = self.get_top_posts_for_cluster(cluster_id, 3)
+        # Get more posts than needed to allow for fallbacks
+        top_posts = self.get_top_posts_for_cluster(cluster_id, 10)  # Get up to 10 posts as candidates
         screenshot_info = []
         urls_to_screenshot = []
 
-        for i, post in enumerate(top_posts):
+        # First pass: identify existing screenshots and URLs to generate
+        candidate_posts = []
+        for post in top_posts:
             url = self.url_from_post(post)
             if not url:
-                print(f"    ⚠️  Could not generate URL for post {i+1}")
-                continue
+                continue  # Skip posts without valid URLs
 
             author_handle = post.get('author', {}).get('handle', 'unknown')
             uri = post.get('uri', '')
@@ -248,31 +402,89 @@ class ClusterReportGenerator:
             screenshot_filename = f"bluesky_post_{author_handle}_{post_id}.png"
             screenshot_path = self.screenshots_dir / screenshot_filename
 
-            # Check if screenshot already exists
-            if screenshot_path.exists():
-                screenshot_info.append({
-                    'post': post,
-                    'url': url,
-                    'screenshot_path': screenshot_path,
-                    'screenshot_filename': screenshot_filename,
-                    'score': self.calculate_post_score(post)
-                })
-            else:
-                urls_to_screenshot.append(url)
-                screenshot_info.append({
-                    'post': post,
-                    'url': url,
-                    'screenshot_path': screenshot_path,
-                    'screenshot_filename': screenshot_filename,
-                    'score': self.calculate_post_score(post)
-                })
+            candidate_posts.append({
+                'post': post,
+                'url': url,
+                'screenshot_path': screenshot_path,
+                'screenshot_filename': screenshot_filename,
+                'score': self.calculate_post_score(post),
+                'exists': screenshot_path.exists()
+            })
 
-        # Generate missing screenshots if any
+        # Second pass: intelligently select which screenshots to generate
+        # First, see how many of the top 3 already exist
+        existing_count = sum(1 for c in candidate_posts[:3] if c['exists'])
+        needed_count = 3 - existing_count
+
+        # Only generate screenshots for posts we'll actually use
+        urls_to_screenshot = []
+        selected_for_generation = []
+
+        if needed_count > 0:
+            # Go through candidates in order and select ones that need generation
+            for candidate in candidate_posts:
+                if not candidate['exists'] and len(selected_for_generation) < needed_count:
+                    urls_to_screenshot.append(candidate['url'])
+                    selected_for_generation.append(candidate)
+
         if urls_to_screenshot:
-            print(f"    📸 Generating {len(urls_to_screenshot)} screenshots...")
+            print(f"    📸 Generating {len(urls_to_screenshot)} screenshots (need {needed_count} total)...")
             print(f"    🔗 URLs: {urls_to_screenshot[:3]}...")  # Show first 3 URLs for debugging
-            self.generate_screenshots_batch(urls_to_screenshot)
+            success = self.generate_screenshots_batch(urls_to_screenshot)
 
+            # Update existence status for ALL candidates after generation attempt
+            # (screenshots might have been generated for posts we didn't explicitly request)
+            for candidate in candidate_posts:
+                candidate['exists'] = candidate['screenshot_path'].exists()
+
+            # Count how many we have now
+            total_existing = sum(1 for c in candidate_posts if c['exists'])
+
+            if total_existing < 3:
+                # Some screenshots failed, try more candidates
+                still_needed = 3 - total_existing
+                remaining_candidates = [c for c in candidate_posts if not c['exists']]
+
+                if remaining_candidates:
+                    additional_urls = []
+                    additional_candidates = []
+
+                    for candidate in remaining_candidates[:still_needed]:
+                        additional_urls.append(candidate['url'])
+                        additional_candidates.append(candidate)
+
+                    if additional_urls:
+                        print(f"    🔄 Some screenshots failed, trying {len(additional_urls)} more...")
+                        success = self.generate_screenshots_batch(additional_urls)
+
+                        # Update existence status for ALL candidates again
+                        for candidate in candidate_posts:
+                            candidate['exists'] = candidate['screenshot_path'].exists()
+
+        # Third pass: select the best 3 posts that have successful screenshots
+        successful_screenshots = [c for c in candidate_posts if c['exists']]
+
+        # If we don't have 3 successful screenshots, include failed ones to maintain count
+        if len(successful_screenshots) < 3:
+            failed_screenshots = [c for c in candidate_posts if not c['exists']]
+            # Add failed ones to reach 3 total
+            needed = 3 - len(successful_screenshots)
+            successful_screenshots.extend(failed_screenshots[:needed])
+
+        # Take the top 3 (prioritizing successful screenshots)
+        final_screenshots = successful_screenshots[:3]
+
+        # Convert to the expected format
+        for candidate in final_screenshots:
+            screenshot_info.append({
+                'post': candidate['post'],
+                'url': candidate['url'],
+                'screenshot_path': candidate['screenshot_path'],
+                'screenshot_filename': candidate['screenshot_filename'],
+                'score': candidate['score']
+            })
+
+        print(f"    ✅ Selected {len(screenshot_info)} posts for cluster {cluster_id}")
         return screenshot_info
 
     def generate_screenshots_batch(self, urls):
@@ -384,10 +596,14 @@ class ClusterReportGenerator:
         # Generate sections in desired order
         html_content = self._generate_html_header()
         html_content += self._generate_title_section()  # Title at top
+        html_content += self._generate_table_of_contents()  # Add TOC after title
         html_content += self._generate_methodology_section()  # Methodology back at top
         html_content += self._generate_executive_summary()
         html_content += self._generate_cluster_summary_table()
         html_content += self._generate_individual_cluster_sections()
+        html_content += self._generate_author_profiles_section()  # New author profiles section
+        html_content += self._generate_special_search_section()  # Special search section
+        html_content += self._generate_top_links_section()  # Top shared links section
         html_content += self._generate_irrelevant_clusters_section()
         html_content += self._generate_temporal_analysis()  # Moved to end
         html_content += self._generate_html_footer()
@@ -410,6 +626,9 @@ class ClusterReportGenerator:
     <title>Bluesky Cluster Analysis Report</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+        html {
+            scroll-behavior: smooth;
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             max-width: 1200px;
@@ -496,7 +715,54 @@ class ClusterReportGenerator:
     def _generate_title_section(self):
         """Generate the main title section"""
         return f"""
-<h1>Bluesky Cluster Analysis Report - {self.session_name.title()}</h1>
+<h1 id="top">Bluesky Cluster Analysis Report - {self.session_name.title()}</h1>
+"""
+
+    def _generate_table_of_contents(self):
+        """Generate clickable table of contents"""
+        # Count relevant clusters for individual cluster sections
+        num_relevant_clusters = len(self.relevant_cluster_ids)
+
+        # Count search groups
+        num_search_groups = len(self.search_config.get('search_groups', []))
+
+        return f"""
+<div style="background: #f8f9fa; border: 2px solid #4a9eff; border-radius: 10px; padding: 25px; margin: 30px 0;">
+    <h2 style="margin-top: 0; color: #4a9eff;">📋 Table of Contents</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+        <div>
+            <h3 style="color: #2c5aa0; margin-bottom: 15px;">📊 Overview & Analysis</h3>
+            <ul style="list-style-type: none; padding-left: 0;">
+                <li style="margin: 8px 0;"><a href="#methodology" style="color: #4a9eff; text-decoration: none;">📋 Methodology & Data Collection</a></li>
+                <li style="margin: 8px 0;"><a href="#executive-summary" style="color: #4a9eff; text-decoration: none;">📊 Executive Summary</a></li>
+                <li style="margin: 8px 0;"><a href="#cluster-summary" style="color: #4a9eff; text-decoration: none;">📋 Relevant Clusters Summary</a></li>
+            </ul>
+        </div>
+
+        <div>
+            <h3 style="color: #2c5aa0; margin-bottom: 15px;">🎯 Detailed Sections</h3>
+            <ul style="list-style-type: none; padding-left: 0;">
+                <li style="margin: 8px 0;"><a href="#individual-clusters" style="color: #4a9eff; text-decoration: none;">🎯 Individual Cluster Analysis ({num_relevant_clusters} clusters)</a></li>
+                <li style="margin: 8px 0;"><a href="#author-profiles" style="color: #4a9eff; text-decoration: none;">👤 Top Author Profiles (20 authors)</a></li>
+                <li style="margin: 8px 0;"><a href="#special-searches" style="color: #4a9eff; text-decoration: none;">🔍 Special Topic Searches ({num_search_groups} topics)</a></li>
+                <li style="margin: 8px 0;"><a href="#top-links" style="color: #4a9eff; text-decoration: none;">🔗 Top Shared Links (30 links)</a></li>
+            </ul>
+        </div>
+
+        <div>
+            <h3 style="color: #2c5aa0; margin-bottom: 15px;">📈 Additional Analysis</h3>
+            <ul style="list-style-type: none; padding-left: 0;">
+                <li style="margin: 8px 0;"><a href="#irrelevant-clusters" style="color: #4a9eff; text-decoration: none;">🗂️ Irrelevant Clusters</a></li>
+                <li style="margin: 8px 0;"><a href="#temporal-analysis" style="color: #4a9eff; text-decoration: none;">📈 Temporal Analysis</a></li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #ddd; font-size: 0.9em; color: #666;">
+        💡 <strong>Navigation Tip:</strong> Click any section title to jump directly to that part of the report.
+        Use your browser's "Find" function (Ctrl/Cmd+F) to search for specific terms.
+    </div>
+</div>
 """
 
     def _generate_methodology_section(self):
@@ -535,7 +801,7 @@ class ClusterReportGenerator:
             date_range_str = f"{start} to {end}"
 
         return f"""
-<div class="metadata">
+<div class="metadata" id="methodology">
     <h2>📋 Methodology & Data Collection</h2>
     <p><strong>Report Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
     <p><strong>Session:</strong> {self.session_name}</p>
@@ -611,7 +877,10 @@ class ClusterReportGenerator:
         cluster_viz_html = self._generate_2d_cluster_visualization()
 
         html = f"""
-<h2>📊 Executive Summary</h2>
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
+<h2 id="executive-summary">📊 Executive Summary</h2>
 
 <div class="summary-stats">
     <div class="stat-card">
@@ -637,38 +906,6 @@ class ClusterReportGenerator:
 </div>
 
 {cluster_viz_html}
-
-<h3>🏆 Top 20 Authors (by total likes in relevant clusters)</h3>
-<table>
-    <thead>
-        <tr>
-            <th>Rank</th>
-            <th>Author</th>
-            <th>Posts</th>
-            <th>Total Likes</th>
-            <th>Avg Likes/Post</th>
-        </tr>
-    </thead>
-    <tbody>
-"""
-
-        for i, (handle, stats) in enumerate(top_authors, 1):
-            avg_likes_per_post = stats['likes'] / stats['posts'] if stats['posts'] > 0 else 0
-            display_name = stats['display_name'] if stats['display_name'] != handle else handle
-
-            html += f"""
-        <tr>
-            <td>{i}</td>
-            <td><strong>{display_name}</strong><br><small><a href="https://bsky.app/profile/{handle}" target="_blank">@{handle}</a></small></td>
-            <td>{stats['posts']}</td>
-            <td>{stats['likes']:,}</td>
-            <td>{avg_likes_per_post:.1f}</td>
-        </tr>
-"""
-
-        html += """
-    </tbody>
-</table>
 """
 
         return html
@@ -910,7 +1147,10 @@ try {{
         chart_id = "temporal-chart"
 
         html = f"""
-<div style="margin: 60px 0 40px 0; border-top: 3px solid #999; padding-top: 40px;">
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #999; padding-top: 40px;" id="temporal-analysis">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
 <h2>📈 Temporal Analysis</h2>
 <p>Posts and likes per day for relevant clusters over the analysis period.</p>
 
@@ -1024,7 +1264,10 @@ const chart = new Chart(ctx, {{
         relevant_clusters.sort(key=lambda x: x[0], reverse=True)
 
         html = f"""
-<h2>📋 Relevant Clusters Summary</h2>
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
+<h2 id="cluster-summary">📋 Relevant Clusters Summary</h2>
 <p>Overview of the {len(relevant_clusters)} relevant clusters identified in the analysis, ordered by post count.</p>
 
 <div class="cluster-summary-table">
@@ -1043,12 +1286,12 @@ const chart = new Chart(ctx, {{
 
         for post_count, cluster_id, cluster_desc, total_likes in relevant_clusters:
             avg_likes = total_likes / post_count if post_count > 0 else 0
-            description = cluster_desc.get('theme', 'No description available')
+            description = cluster_desc.get('title', cluster_desc.get('theme', 'No description available'))
             display_id = self.get_display_cluster_id(cluster_id)
 
             html += f"""
             <tr>
-                <td><strong>Cluster {display_id}</strong></td>
+                <td><strong><a href="#cluster-{display_id}" style="color: #2c5aa0; text-decoration: none;">Cluster {display_id}</a></strong></td>
                 <td>{post_count:,}</td>
                 <td>{total_likes:,}</td>
                 <td>{avg_likes:.1f}</td>
@@ -1068,8 +1311,57 @@ const chart = new Chart(ctx, {{
         """Generate individual cluster sections with screenshots"""
         print("  🎯 Generating individual cluster sections...")
 
+        # Pre-calculate top 20 overall authors for linking
+        overall_author_stats = defaultdict(lambda: {
+            'posts': 0,
+            'likes': 0,
+            'handle': '',
+            'display_name': ''
+        })
+
+        for overall_cluster_id in self.relevant_cluster_ids:
+            overall_cluster_posts = self.get_posts_for_cluster(overall_cluster_id)
+            for post in overall_cluster_posts:
+                author = post.get('author', {})
+                author_handle = author.get('handle', 'unknown')
+                overall_author_stats[author_handle]['posts'] += 1
+                overall_author_stats[author_handle]['likes'] += post.get('likeCount', 0)
+                overall_author_stats[author_handle]['handle'] = author_handle
+                overall_author_stats[author_handle]['display_name'] = author.get('displayName', author_handle)
+
+        # Find qualified authors (same logic as author profiles)
+        cluster_top_authors = set()
+        for qual_cluster_id in self.relevant_cluster_ids:
+            qual_cluster_posts = self.get_posts_for_cluster(qual_cluster_id)
+            qual_cluster_author_stats = defaultdict(lambda: {'posts': 0, 'likes': 0, 'handle': ''})
+            for post in qual_cluster_posts:
+                author = post.get('author', {})
+                author_handle = author.get('handle', 'unknown')
+                qual_cluster_author_stats[author_handle]['posts'] += 1
+                qual_cluster_author_stats[author_handle]['likes'] += post.get('likeCount', 0)
+
+            top_2_cluster_authors = sorted(
+                qual_cluster_author_stats.items(),
+                key=lambda x: x[1]['likes'],
+                reverse=True
+            )[:2]
+
+            for author_handle, _ in top_2_cluster_authors:
+                cluster_top_authors.add(author_handle)
+
+        qualified_overall_authors = [
+            (handle, stats) for handle, stats in overall_author_stats.items()
+            if handle in cluster_top_authors
+        ]
+
+        top_20_overall = sorted(qualified_overall_authors, key=lambda x: x[1]['likes'], reverse=True)[:20]
+        self.top_20_handles_with_ranks = {handle: rank for rank, (handle, _) in enumerate(top_20_overall, 1)}
+
         html = """
-<div style="margin: 60px 0 40px 0; border-top: 3px solid #4a9eff; padding-top: 40px;">
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #4a9eff; padding-top: 40px;" id="individual-clusters">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
 <h2>🎯 Individual Cluster Analysis</h2>
 <p>Detailed analysis of each relevant cluster, ordered by number of posts.</p>
 </div>
@@ -1113,8 +1405,8 @@ const chart = new Chart(ctx, {{
 
             # Build HTML for this cluster
             html += f"""
-<div class="cluster-card">
-    <h3>Cluster {display_id}</h3>
+<div class="cluster-card" id="cluster-{display_id}">
+    <h2 style="color: #4a9eff; font-size: 1.8em; margin-bottom: 20px;">Cluster {display_id}</h2>
 
     <div class="summary-stats">
         <div class="stat-card">
@@ -1135,7 +1427,7 @@ const chart = new Chart(ctx, {{
         </div>
     </div>
 
-    <h4>📝 Description</h4>
+    <h4>📝 {cluster_desc.get('title', 'Cluster Theme')}</h4>
     <p>{cluster_desc.get('theme', 'No description available')}</p>
 
     <h4>🏷️ Keywords</h4>
@@ -1204,10 +1496,18 @@ const chart = new Chart(ctx, {{
                 avg_likes_per_post = stats['likes'] / stats['posts'] if stats['posts'] > 0 else 0
                 display_name = stats['display_name'] if stats['display_name'] != handle else handle
 
+                # Check if this author is in the overall top 20
+                author_cell = f"<strong>{display_name}</strong><br>"
+                if handle in self.top_20_handles_with_ranks:
+                    profile_rank = self.top_20_handles_with_ranks[handle]
+                    author_cell += f"<small><a href=\"#author-profile-{profile_rank}\" style=\"color: #8e44ad; text-decoration: none;\">📊 Top {profile_rank} Overall</a> | <a href=\"https://bsky.app/profile/{handle}\" target=\"_blank\">@{handle}</a></small>"
+                else:
+                    author_cell += f"<small><a href=\"https://bsky.app/profile/{handle}\" target=\"_blank\">@{handle}</a></small>"
+
                 html += f"""
             <tr>
                 <td>{rank}</td>
-                <td><strong>{display_name}</strong><br><small><a href="https://bsky.app/profile/{handle}" target="_blank">@{handle}</a></small></td>
+                <td>{author_cell}</td>
                 <td>{stats['posts']}</td>
                 <td>{stats['likes']:,}</td>
                 <td>{avg_likes_per_post:.1f}</td>
@@ -1217,6 +1517,385 @@ const chart = new Chart(ctx, {{
             html += """
         </tbody>
     </table>
+</div>
+"""
+
+        return html
+
+    def _generate_author_profiles_section(self):
+        """Generate individual author profile sections for top 20 authors"""
+        print("  👤 Generating author profiles section...")
+
+        # Calculate overall stats for relevant clusters only (same logic as executive summary)
+        author_stats = defaultdict(lambda: {
+            'posts': 0,
+            'likes': 0,
+            'handle': '',
+            'display_name': '',
+            'posts_data': [],
+            'cluster_activity': defaultdict(int)  # cluster_id -> post_count
+        })
+
+        for cluster_id in self.relevant_cluster_ids:
+            cluster_posts = self.get_posts_for_cluster(cluster_id)
+
+            for post in cluster_posts:
+                # Author stats
+                author = post.get('author', {})
+                author_handle = author.get('handle', 'unknown')
+                author_stats[author_handle]['posts'] += 1
+                author_stats[author_handle]['likes'] += post.get('likeCount', 0)
+                author_stats[author_handle]['handle'] = author_handle
+                author_stats[author_handle]['display_name'] = author.get('displayName', author_handle)
+                author_stats[author_handle]['posts_data'].append(post)
+
+                # Track cluster activity
+                author_stats[author_handle]['cluster_activity'][cluster_id] += 1
+
+        # Find authors who appear in top 5 of any cluster
+        cluster_top_authors = set()
+        for cluster_id in self.relevant_cluster_ids:
+            cluster_posts = self.get_posts_for_cluster(cluster_id)
+
+            # Get top authors for this cluster
+            cluster_author_stats = defaultdict(lambda: {'posts': 0, 'likes': 0, 'handle': ''})
+            for post in cluster_posts:
+                author = post.get('author', {})
+                author_handle = author.get('handle', 'unknown')
+                cluster_author_stats[author_handle]['posts'] += 1
+                cluster_author_stats[author_handle]['likes'] += post.get('likeCount', 0)
+                cluster_author_stats[author_handle]['handle'] = author_handle
+
+            # Get top 2 authors in this cluster by total likes
+            top_2_cluster_authors = sorted(
+                cluster_author_stats.items(),
+                key=lambda x: x[1]['likes'],
+                reverse=True
+            )[:2]
+
+            # Add these authors to our qualified set
+            for author_handle, _ in top_2_cluster_authors:
+                cluster_top_authors.add(author_handle)
+
+        print(f"    📊 Found {len(cluster_top_authors)} authors who appear in top 2 of at least one cluster")
+
+        # Filter overall top authors to only include those who appear in cluster top 2s
+        qualified_authors = [
+            (handle, stats) for handle, stats in author_stats.items()
+            if handle in cluster_top_authors
+        ]
+
+        # Top 20 qualified authors by total likes
+        top_authors = sorted(qualified_authors, key=lambda x: x[1]['likes'], reverse=True)[:20]
+
+        print(f"    🏆 Selected {len(top_authors)} top authors (qualified by cluster top-2 appearances)")
+
+        html = f"""
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #8e44ad; padding-top: 40px;" id="author-profiles">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
+<h2>👤 Top Author Profiles</h2>
+<p>Individual profiles for the top 20 authors by total likes, featuring screenshots of their most engaging posts.</p>
+
+<h3>🏆 Top 20 Authors Overview (by total likes in relevant clusters)</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Rank</th>
+            <th>Author</th>
+            <th>Posts</th>
+            <th>Total Likes</th>
+            <th>Avg Likes/Post</th>
+        </tr>
+    </thead>
+    <tbody>
+"""
+
+        for i, (handle, stats) in enumerate(top_authors, 1):
+            avg_likes_per_post = stats['likes'] / stats['posts'] if stats['posts'] > 0 else 0
+            display_name = stats['display_name'] if stats['display_name'] != handle else handle
+
+            html += f"""
+        <tr>
+            <td>{i}</td>
+            <td><strong><a href="#author-profile-{i}" style="color: #8e44ad; text-decoration: none;">{display_name}</a></strong><br><small><a href="https://bsky.app/profile/{handle}" target="_blank">@{handle}</a></small></td>
+            <td>{stats['posts']}</td>
+            <td>{stats['likes']:,}</td>
+            <td>{avg_likes_per_post:.1f}</td>
+        </tr>
+"""
+
+        html += """
+    </tbody>
+</table>
+</div>
+"""
+
+        # Generate profile for each top author
+        for rank, (handle, stats) in enumerate(top_authors, 1):
+            display_name = stats['display_name'] if stats['display_name'] != handle else handle
+            avg_likes_per_post = stats['likes'] / stats['posts'] if stats['posts'] > 0 else 0
+
+            print(f"    👤 Processing profile for {display_name} (@{handle}) - Rank {rank}")
+
+            # Get top posts by this author (up to 12)
+            author_posts = stats['posts_data']
+
+            # Sort by like count and take top 9
+            top_posts = sorted(author_posts, key=lambda p: p.get('likeCount', 0), reverse=True)[:9]
+
+            # Generate screenshots for top posts
+            screenshot_info = self._generate_screenshots_for_author(handle, top_posts)
+
+            # Get all clusters for this author for counting, but limit display to top 5
+            cluster_activity = stats['cluster_activity']
+            all_clusters = sorted(cluster_activity.items(), key=lambda x: x[1], reverse=True)
+            top_5_clusters = all_clusters[:5]
+
+            # Create cluster activity HTML
+            cluster_activity_html = ""
+            if top_5_clusters:
+                cluster_activity_html = "<h4>🎯 Most Active Clusters</h4><div class=\"keywords\">"
+                for cluster_id, post_count in top_5_clusters:
+                    display_id = self.get_display_cluster_id(cluster_id)
+                    cluster_desc = self.cluster_descriptions[cluster_id]
+                    cluster_title = cluster_desc.get('title', cluster_desc.get('theme', 'Unknown theme')[:50])  # Use title, fallback to truncated theme
+                    cluster_activity_html += f'<span class="keyword" style="background: #e8f4fd; border-color: #8e44ad;"><a href="#cluster-{display_id}" style="color: #8e44ad; text-decoration: none;">Cluster {display_id}: {post_count} posts</a><br><small>{cluster_title}</small></span>'
+                cluster_activity_html += "</div>"
+
+            html += f"""
+<div class="cluster-card" style="border-left: 4px solid #8e44ad;" id="author-profile-{rank}">
+    <h2 style="color: #8e44ad; font-size: 1.8em; margin-bottom: 20px;">#{rank}: {display_name}</h2>
+    <p><a href="https://bsky.app/profile/{handle}" target="_blank" style="color: #8e44ad;">@{handle}</a></p>
+
+    <div class="summary-stats">
+        <div class="stat-card">
+            <div class="stat-number">{stats['posts']:,}</div>
+            <div class="stat-label">Posts</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{stats['likes']:,}</div>
+            <div class="stat-label">Total Likes</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{avg_likes_per_post:.1f}</div>
+            <div class="stat-label">Avg Likes/Post</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{len(all_clusters)}</div>
+            <div class="stat-label">Active Clusters</div>
+        </div>
+    </div>
+
+    {cluster_activity_html}
+
+    <h4>📸 Top Posts (up to 9)</h4>
+    <div class="screenshots" style="grid-template-columns: repeat(3, 1fr); gap: 15px;">
+"""
+
+            # Add screenshots
+            for i, screenshot in enumerate(screenshot_info, 1):
+                post = screenshot['post']
+                likes = post.get('likeCount', 0)
+
+                # Get cluster information for this post
+                uri = post.get('uri')
+                cluster_id = None
+                display_cluster_id = None
+                cluster_title = 'Unknown cluster'
+
+                if uri and uri in self.cluster_assignments:
+                    cluster_id = self.cluster_assignments[uri].get('cluster_id')
+                    if cluster_id is not None:
+                        display_cluster_id = self.get_display_cluster_id(cluster_id)
+                        cluster_desc = self.cluster_descriptions.get(cluster_id, {})
+                        cluster_title = cluster_desc.get('title', cluster_desc.get('theme', 'Unknown theme'))
+
+                # Convert screenshot to base64 for embedding
+                base64_image = self.screenshot_to_base64(screenshot['screenshot_path'])
+
+                if base64_image:
+                    html += f"""
+        <div class="screenshot">
+            <img src="{base64_image}" alt="Post {i} by {display_name}">
+            <div style="padding: 10px; background: #f8f9fa;">
+                <strong>Post #{i}</strong><br>
+                <small>{likes:,} likes</small><br>"""
+
+                    # Add cluster info if available
+                    if cluster_id is not None and display_cluster_id is not None:
+                        html += f"""
+                <div style="margin: 5px 0;">
+                    <small style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; color: #1976d2;">
+                        <a href="#cluster-{display_cluster_id}" style="text-decoration: none; color: #1976d2;">
+                            Cluster {display_cluster_id}: {cluster_title}
+                        </a>
+                    </small>
+                </div>"""
+
+                    html += f"""
+                <small><a href="{screenshot['url']}" target="_blank">View original</a></small>
+            </div>
+        </div>
+"""
+                else:
+                    html += f"""
+        <div class="screenshot">
+            <div style="padding: 20px; background: #f8f9fa; text-align: center; color: #666;">
+                <p><strong>Screenshot not available</strong></p>
+                <p>Post #{i}: {likes:,} likes</p>"""
+
+                    # Add cluster info if available
+                    if cluster_id is not None and display_cluster_id is not None:
+                        html += f"""
+                <div style="margin: 5px 0;">
+                    <small style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; color: #1976d2;">
+                        <a href="#cluster-{display_cluster_id}" style="text-decoration: none; color: #1976d2;">
+                            Cluster {display_cluster_id}: {cluster_title}
+                        </a>
+                    </small>
+                </div>"""
+
+                    html += f"""
+                <small><a href="{screenshot['url']}" target="_blank">View original</a></small>
+            </div>
+        </div>
+"""
+
+            html += """
+    </div>
+</div>
+"""
+
+        return html
+
+    def _generate_screenshots_for_author(self, author_handle: str, posts: list):
+        """Generate screenshots for an author's top posts"""
+        print(f"    📸 Getting screenshots for @{author_handle}...")
+
+        screenshot_info = []
+        urls_to_screenshot = []
+
+        for i, post in enumerate(posts, 1):
+            url = self.url_from_post(post)
+            if not url:
+                print(f"    ⚠️  Could not generate URL for post {i}")
+                continue
+
+            uri = post.get('uri', '')
+            post_id = uri.split('/app.bsky.feed.post/')[-1] if '/app.bsky.feed.post/' in uri else 'unknown'
+
+            screenshot_filename = f"bluesky_post_{author_handle}_{post_id}.png"
+            screenshot_path = self.screenshots_dir / screenshot_filename
+
+            # Check if screenshot already exists
+            if screenshot_path.exists():
+                screenshot_info.append({
+                    'post': post,
+                    'url': url,
+                    'screenshot_path': screenshot_path,
+                    'screenshot_filename': screenshot_filename,
+                })
+            else:
+                urls_to_screenshot.append(url)
+                screenshot_info.append({
+                    'post': post,
+                    'url': url,
+                    'screenshot_path': screenshot_path,
+                    'screenshot_filename': screenshot_filename,
+                })
+
+        # Generate missing screenshots if any
+        if urls_to_screenshot:
+            print(f"    📸 Generating {len(urls_to_screenshot)} screenshots for @{author_handle}...")
+            self.generate_screenshots_batch(urls_to_screenshot)
+
+        return screenshot_info
+
+    def _generate_top_links_section(self):
+        """Generate top links section showing the most shared links"""
+        print("  🔗 Generating top links section...")
+
+        top_links = self.analyze_top_links()
+
+        if not top_links:
+            return """
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #ff6b6b; padding-top: 40px;">
+<h2>🔗 Top Shared Links</h2>
+<p>No external links found in the analyzed posts.</p>
+</div>
+"""
+
+        # Group links by domain for summary
+        domain_stats = defaultdict(int)
+        for url, stats in top_links:
+            domain_stats[stats['domain']] += stats['count']
+
+        top_domains = sorted(domain_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        html = f"""
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #ff6b6b; padding-top: 40px;" id="top-links">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
+<h2>🔗 Top Shared Links</h2>
+<p>The most frequently shared external links across all relevant clusters, showing the content and resources that the community is engaging with.</p>
+
+<h3>📊 Top Domains</h3>
+<div class="summary-stats">
+"""
+
+        # Add top domains stats
+        for i, (domain, count) in enumerate(top_domains[:5]):
+            html += f"""
+    <div class="stat-card">
+        <div class="stat-number">{count}</div>
+        <div class="stat-label"><a href="https://{domain}" target="_blank" style="color: #4a9eff; text-decoration: none;">{domain}</a></div>
+    </div>
+"""
+
+        html += """
+</div>
+
+<h3>🔗 Top 30 Shared Links</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Rank</th>
+            <th>Link</th>
+            <th>Domain</th>
+            <th>Shares</th>
+            <th>Total Likes</th>
+            <th>Avg Likes/Share</th>
+        </tr>
+    </thead>
+    <tbody>
+"""
+
+        # Add individual links
+        for i, (url, stats) in enumerate(top_links, 1):
+            # Truncate long URLs for display
+            display_url = url
+            if len(display_url) > 60:
+                display_url = display_url[:57] + "..."
+
+            avg_likes = stats['total_likes'] / stats['count'] if stats['count'] > 0 else 0
+
+            html += f"""
+        <tr>
+            <td>{i}</td>
+            <td><a href="{url}" target="_blank" style="color: #4a9eff;">{display_url}</a></td>
+            <td>{stats['domain']}</td>
+            <td>{stats['count']}</td>
+            <td>{stats['total_likes']:,}</td>
+            <td>{avg_likes:.1f}</td>
+        </tr>
+"""
+
+        html += """
+    </tbody>
+</table>
 </div>
 """
 
@@ -1237,7 +1916,10 @@ const chart = new Chart(ctx, {{
         irrelevant_clusters.sort(key=lambda x: x[0], reverse=True)
 
         html = f"""
-<div style="margin: 60px 0 40px 0; border-top: 3px solid #999; padding-top: 40px;">
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #999; padding-top: 40px;" id="irrelevant-clusters">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
 <h2>🗂️ Irrelevant Clusters</h2>
 <p>The following {len(irrelevant_clusters)} clusters were identified but deemed irrelevant to the AI/technology theme, ordered by post count.</p>
 </div>
@@ -1255,13 +1937,14 @@ const chart = new Chart(ctx, {{
 """
 
         for i, (post_count, cluster_id, cluster_desc) in enumerate(irrelevant_clusters):
-            description = cluster_desc.get('theme', 'No description available')
+            title = cluster_desc.get('title', 'Untitled Cluster')
+            theme = cluster_desc.get('theme', 'No description available')
 
             html += f"""
             <tr>
                 <td>Cluster {i}</td>
                 <td>{post_count:,}</td>
-                <td>{description}</td>
+                <td><strong>{title}</strong><br><span style="color: #666; font-size: 0.9em;">{theme}</span></td>
             </tr>
 """
 
@@ -1272,6 +1955,224 @@ const chart = new Chart(ctx, {{
 """
 
         return html
+
+
+    def _generate_special_search_section(self):
+        """Generate special search section using pre-generated special topics data"""
+        print("  🔍 Generating special search section...")
+
+        # Load special topics data
+        special_topics_file = self.datasets_dir / f"{self.session_name}_special_topics.jsonl"
+
+        if not special_topics_file.exists():
+            return """
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #9b59b6; padding-top: 40px;" id="special-searches">
+<h2>🔍 Special Topic Searches</h2>
+<p>Special topics analysis not found. Run <code>python special_topics.py {session_name}</code> to generate this section.</p>
+</div>
+""".format(session_name=self.session_name)
+
+        special_topics = []
+        try:
+            with open(special_topics_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        special_topics.append(json.loads(line.strip()))
+        except Exception as e:
+            print(f"    ❌ Error loading special topics data: {e}")
+            return """
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #9b59b6; padding-top: 40px;" id="special-searches">
+<h2>🔍 Special Topic Searches</h2>
+<p>Error loading special topics data. Please regenerate with <code>python special_topics.py {session_name}</code>.</p>
+</div>
+""".format(session_name=self.session_name)
+
+        if not special_topics:
+            return """
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #9b59b6; padding-top: 40px;" id="special-searches">
+<h2>🔍 Special Topic Searches</h2>
+<p>No special topics found in data file.</p>
+</div>
+"""
+
+        html = f"""
+<div style="margin: 60px 0 40px 0; border-top: 3px solid #9b59b6; padding-top: 40px;" id="special-searches">
+<div style="text-align: right; margin-bottom: -10px;">
+    <small><a href="#top" style="color: #666; text-decoration: none;">↑ Back to top</a></small>
+</div>
+<h2>🔍 Special Topic Searches</h2>
+<p>Deep dives into specific topics and themes, showcasing the top 6 posts for each search category with AI-generated summaries.</p>
+</div>
+"""
+
+        # Process each special topic
+        for group_idx, topic in enumerate(special_topics, 1):
+            title = topic.get('topic_title', f'Topic {group_idx}')
+            keywords = topic.get('keywords', [])
+            posts = topic.get('posts', [])
+            ai_summary = topic.get('ai_summary', 'No summary available.')
+
+            print(f"    📝 Processing topic: {title} ({len(posts)} posts)")
+
+            # Generate screenshots for posts
+            screenshot_info = self._generate_screenshots_for_special_topic_posts(title, posts)
+
+            # Format keywords using the same style as methodology section
+            keywords_html = '<div class="keywords">'
+            for keyword in keywords:
+                keywords_html += f'<span class="keyword">{keyword}</span>'
+            keywords_html += '</div>'
+
+            # Get total post count for display
+            total_count = topic.get('total_post_count', len(posts))
+            display_text = f"{total_count} posts found"
+            if total_count > len(posts):
+                display_text += f" (showing top {len(posts)} by engagement score)"
+            elif len(posts) > 0:
+                display_text += f" (showing top {len(posts)} by engagement score)"
+
+            html += f"""
+<div class="cluster-card" style="border-left: 4px solid #9b59b6;" id="search-{group_idx}">
+    <h2 style="color: #9b59b6; font-size: 1.8em; margin-bottom: 20px;">{title}</h2>
+    <p><strong>Search Keywords:</strong></p>
+    {keywords_html}
+
+    <h4>🤖 AI Analysis</h4>
+    <div style="background: #f0f8ff; padding: 15px; border-radius: 8px; border-left: 4px solid #9b59b6; margin: 15px 0;">
+        <p style="margin: 0; font-style: italic; color: #333;">{ai_summary}</p>
+    </div>
+
+    <p><strong>Results:</strong> {display_text}</p>
+
+    <h4>📸 Top Posts</h4>
+    <div class="screenshots" style="grid-template-columns: repeat(3, 1fr); gap: 20px;">
+"""
+
+            # Add screenshots
+            for i, screenshot in enumerate(screenshot_info, 1):
+                post_data = screenshot['post_data']
+                author = post_data.get('author', {})
+                author_name = author.get('displayName', author.get('handle', 'Unknown'))
+                author_handle = author.get('handle', 'unknown')
+                likes = post_data.get('likeCount', 0)
+                cluster_id = post_data.get('cluster_id')
+                display_cluster_id = post_data.get('display_cluster_id')
+
+                # Get cluster info
+                cluster_desc = self.cluster_descriptions.get(cluster_id, {})
+                cluster_title = cluster_desc.get('title', cluster_desc.get('theme', 'Unknown theme'))
+
+                # Convert screenshot to base64 for embedding
+                base64_image = self.screenshot_to_base64(screenshot['screenshot_path'])
+
+                # Get semantic content for alt text
+                semantic_content = post_data.get('semantic_content', '')
+                # Clean semantic content for alt text (no truncation)
+                alt_text = semantic_content.replace('"', '&quot;').replace('\n', ' ').strip()
+
+                if base64_image:
+                    html += f"""
+        <div class="screenshot">
+            <img src="{base64_image}" alt="{alt_text}">
+            <div style="padding: 15px; background: #f8f9fa;">
+                <div style="margin-bottom: 8px;">
+                    <strong>#{i}: {author_name}</strong>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <small style="color: #666;">@{author_handle}</small>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <small style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; color: #1976d2;">
+                        <a href="#cluster-{display_cluster_id}" style="text-decoration: none; color: #1976d2;">
+                            Cluster {display_cluster_id}: {cluster_title}
+                        </a>
+                    </small>
+                </div>
+                <div>
+                    <small><a href="{screenshot['url']}" target="_blank" style="color: #9b59b6;">View original →</a></small>
+                </div>
+            </div>
+        </div>
+"""
+                else:
+                    html += f"""
+        <div class="screenshot">
+            <div style="padding: 20px; background: #f8f9fa; text-align: center; color: #666; min-height: 200px; display: flex; align-items: center; justify-content: center;">
+                <div>
+                    <p><strong>Screenshot not available</strong></p>
+                    <p>#{i}: {author_name}</p>"""
+
+                    # Add cluster info if available
+                    if cluster_id is not None and display_cluster_id is not None:
+                        html += f"""
+                    <div style="margin: 5px 0;">
+                        <small style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; color: #1976d2;">
+                            <a href="#cluster-{display_cluster_id}" style="text-decoration: none; color: #1976d2;">
+                                Cluster {display_cluster_id}: {cluster_title}
+                            </a>
+                        </small>
+                    </div>"""
+
+                    html += f"""
+                    <small><a href="{screenshot['url']}" target="_blank" style="color: #9b59b6;">View original →</a></small>
+                </div>
+            </div>
+        </div>
+"""
+
+            html += """
+    </div>
+</div>
+"""
+
+        return html
+
+    def _generate_screenshots_for_special_topic_posts(self, topic_title: str, posts: list):
+        """Generate screenshots for special topic posts"""
+        print(f"    📸 Getting screenshots for topic: {topic_title}...")
+
+        screenshot_info = []
+        urls_to_screenshot = []
+
+        for i, post_data in enumerate(posts, 1):
+            uri = post_data.get('uri')
+            if not uri:
+                continue
+
+            # Convert to Bluesky URL
+            author_handle = post_data.get('author', {}).get('handle', 'unknown')
+            if '/app.bsky.feed.post/' in uri:
+                post_id = uri.split('/app.bsky.feed.post/')[-1]
+                url = f"https://bsky.app/profile/{author_handle}/post/{post_id}"
+            else:
+                continue
+
+            screenshot_filename = f"bluesky_post_{author_handle}_{post_id}.png"
+            screenshot_path = self.screenshots_dir / screenshot_filename
+
+            # Check if screenshot already exists
+            if screenshot_path.exists():
+                screenshot_info.append({
+                    'post_data': post_data,
+                    'url': url,
+                    'screenshot_path': screenshot_path,
+                    'screenshot_filename': screenshot_filename
+                })
+            else:
+                urls_to_screenshot.append(url)
+                screenshot_info.append({
+                    'post_data': post_data,
+                    'url': url,
+                    'screenshot_path': screenshot_path,
+                    'screenshot_filename': screenshot_filename
+                })
+
+        # Generate missing screenshots if any
+        if urls_to_screenshot:
+            print(f"    📸 Generating {len(urls_to_screenshot)} screenshots for topic: {topic_title}...")
+            self.generate_screenshots_batch(urls_to_screenshot)
+
+        return screenshot_info
 
 
 def main():
